@@ -1,0 +1,182 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Lambda function with cfn-response.
+Parameters: 
+  DbClusterIdentifiers: 
+    Default: servicemind-staging
+    Description: DB Cluster Identifiers
+    Type: String
+  Region:
+    Default: ap-southeast-1 
+    Description: region only 1 region supported 
+    Type: String
+  StopScheduled: 
+    Default: cron(0 16 ? * MON-SAT *)
+    Description: enter an Schedule expression example cron(0 23 ? * MON-SAT *) see https://docs.aws.amazon.com/AmazonCloudWatch/latest/events/ScheduledEvents.html
+    Type: String
+  StartScheduled: 
+    Default: cron(30 0 ? * MON-SAT *)
+    Description: enter an Schedule expression example cron(0 8 ? * MON-SAT *) see https://docs.aws.amazon.com/AmazonCloudWatch/latest/events/ScheduledEvents.html
+    Type: String
+Resources:
+  StopRDSInstances:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.8
+      Role: !GetAtt Role.Arn
+      Handler: index.lambda_handler
+      Timeout: 60
+      Environment:
+         Variables:
+          DbClusterIdentifiers: !Ref DbClusterIdentifiers
+          Region: !Ref Region
+      Code:
+        ZipFile: |
+          import json
+          import re
+          import os
+          import boto3
+
+          def lambda_handler(event, context):
+            db_identifiers_str = os.environ['DbClusterIdentifiers']
+            region = os.environ['Region']
+            client = boto3.client('rds', region_name=region)
+            response=client.describe_db_clusters()
+            
+            stopped_db_clusters=[]
+            for i in response['DBClusters']:
+              cluarn=i['DBClusterArn']
+              print('DB Cluster ARN: {0}'.format(cluarn))
+              print('DB Cluster Identifier: {0}'.format(i['DBClusterIdentifier']))
+              
+              if i['DBClusterIdentifier']==db_identifiers_str:
+                if i['Status'] == 'available':
+                  client.stop_db_cluster(DBClusterIdentifier = i['DBClusterIdentifier'])
+                  print('stopping DB Cluster {0}'.format(i['DBClusterIdentifier']))
+                  stopped_db_clusters.append(i['DBClusterIdentifier'])
+                elif i['Status'] == 'stopped':
+                  print('DB Cluster {0} is already stopped'.format(i['DBClusterIdentifier']))
+                elif i['Status']=='starting':
+                  print('DB Cluster {0} is in starting state. Please stop the cluster after starting is complete'.format(i['DBClusterIdentifier']))
+                elif i['Status']=='stopping':
+                  print('DB Cluster {0} is already in stopping state.'.format(i['DBClusterIdentifier']))
+              elif i['DBClusterIdentifier'] != db_identifiers_str:
+                print('DB Cluster {0} is not part of autoshutdown'.format(i['DBClusterIdentifier']))      
+                
+            
+            return {
+            'statusCode': 200,
+            'body': json.dumps('stopped db clusters: ' + str(stopped_db_clusters))
+            }
+      Description: Function that stops db clusters
+  permissionForEventsToInvokeStopRDSInstances:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt StopRDSInstances.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      "SourceArn" : !GetAtt StopScheduledRule.Arn
+
+  StartRDSInstances:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.8
+      Role: !GetAtt Role.Arn
+      Handler: index.lambda_handler
+      Timeout: 60
+      Environment:
+         Variables:
+          DbClusterIdentifiers: !Ref DbClusterIdentifiers
+          Region: !Ref Region
+      Code:
+        ZipFile: |
+          import json
+          import re
+          import os
+          import boto3
+
+          def lambda_handler(event, context):
+            db_identifiers_str = os.environ['DbClusterIdentifiers']
+            region = os.environ['Region']
+            client = boto3.client('rds', region_name=region)
+            response=client.describe_db_clusters()
+            
+            started_db_clusters=[]
+            for i in response['DBClusters']:
+              cluarn=i['DBClusterArn']
+              print('DB Cluster ARN: {0}'.format(cluarn))
+              print('DB Cluster Identifier: {0}'.format(i['DBClusterIdentifier']))
+              
+              if i['DBClusterIdentifier']==db_identifiers_str:
+                if i['Status'] == 'available':
+                  print('DB Cluster {0} is already started'.format(i['DBClusterIdentifier']))
+                elif i['Status'] == 'stopped':
+                  client.start_db_cluster(DBClusterIdentifier = i['DBClusterIdentifier'])
+                  print('starting DB Cluster {0}'.format(i['DBClusterIdentifier']))
+                  started_db_clusters.append(i['DBClusterIdentifier'])
+                elif i['Status']=='starting':
+                  print('DB Cluster {0} is already in starting state.'.format(i['DBClusterIdentifier']))
+                elif i['Status']=='stopping':
+                  print('DB Cluster {0} is in stopping state. Please start the cluster after stopping is complete'.format(i['DBClusterIdentifier']))
+              elif i['DBClusterIdentifier'] != db_identifiers_str:
+                print('DB Cluster {0} is not part of autoshutdown'.format(i['DBClusterIdentifier']))      
+                
+            
+            return {
+            'statusCode': 200,
+            'body': json.dumps('started db clusters: ' + str(started_db_clusters))
+            }
+      Description: Function that started db clusters
+  permissionForEventsToInvokeStartRDSInstances:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt StartRDSInstances.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      "SourceArn" : !GetAtt StartScheduledRule.Arn
+
+  Role:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: RDSpermissions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                - "rds:*"
+                Resource: '*'
+                
+
+  StopScheduledRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "ScheduledRule"
+      ScheduleExpression: !Ref StopScheduled
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: !GetAtt StopRDSInstances.Arn
+          Id: "TargetFunctionV1"
+  StartScheduledRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "ScheduledRule"
+      ScheduleExpression: !Ref StartScheduled
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: !GetAtt StartRDSInstances.Arn
+          Id: "TargetFunctionV1"
