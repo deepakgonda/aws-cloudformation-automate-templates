@@ -1,0 +1,374 @@
+    # Usage:
+    #   aws cloudformation --region <region> create-stack --stack-name <stack name> --template-body file://vpc-fargate.yaml
+    
+    # This template will:
+    #   Create a VPC with:
+    #       2 Public Subnets
+    #       2 Private Subnets
+    #   An Internet Gateway (with routes to it for Public Subnets)
+    #   A NAT Gateway for outbound access (with routes from Private Subnets set to use it)
+    #   A Private S3 Bucket for putting all resources
+    #   A S3 Bucket for with Hosting Enabled for hosting - static website
+    #   An EC2 Machine with SSH access
+
+    Parameters:
+      ServerlessClusterName:
+        Type: String
+        Description: SLS Cluster Name
+        Default: servicemind
+      AMI:
+        Type: String
+        Default: ami-0c1a7f89451184c8b
+        Description: AMI Id of AMI to use. You can get in Launch Ec2 Instance
+      SshKeyName:
+        Type: AWS::EC2::KeyPair::KeyName
+        Default: ssh-test-servicemind
+        Description: Name of already created ssh key
+      ResourcesBucketName:
+        Type: String
+        Default: servicemind-resources
+        Description: Name of resources bucket (with cors enabled) to be used
+      StaticWebsiteHostingBucketName:
+        Type: String
+        Default: servicemind-app
+        Description: Name of public bucket used for static Website Hosting    
+
+
+    Mappings:
+      SubnetConfig:
+        VPC:
+          CIDR: '10.201.0.0/16' 
+        PrivateOne:
+          CIDR: '10.201.0.0/23'
+        PublicOne:
+          CIDR: '10.201.2.0/23'
+        PrivateTwo:
+          CIDR: '10.201.4.0/23'
+        PublicTwo:
+          CIDR: '10.201.6.0/23'
+
+
+    Resources:
+      # Resources S3 Bucket
+      ResourcesBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref ResourcesBucketName
+          VersioningConfiguration:
+            Status: Suspended
+          PublicAccessBlockConfiguration:
+            BlockPublicAcls: false
+            BlockPublicPolicy: false
+            IgnorePublicAcls: false
+            RestrictPublicBuckets: false
+          CorsConfiguration:
+            CorsRules:
+              - AllowedHeaders:
+                  - '*'
+                AllowedMethods:
+                  - GET
+                  - HEAD
+                  - PUT
+                  - POST
+                  - DELETE
+                AllowedOrigins:
+                  - '*'
+                ExposedHeaders: []
+                Id: myCORSRuleId1
+
+      # Static Website Hosting S3 Bucket
+      StaticWebsiteHostingBucket:
+        Type: AWS::S3::Bucket
+        Properties:
+          BucketName: !Ref StaticWebsiteHostingBucketName
+          VersioningConfiguration:
+            Status: Suspended
+          PublicAccessBlockConfiguration:
+            BlockPublicAcls: false
+            BlockPublicPolicy: false
+            IgnorePublicAcls: false
+            RestrictPublicBuckets: false
+          WebsiteConfiguration:
+            IndexDocument: index.html
+            ErrorDocument: index.html  
+          CorsConfiguration:
+            CorsRules:
+              - AllowedHeaders:
+                  - '*'
+                AllowedMethods:
+                  - GET
+                  - HEAD
+                  - PUT
+                  - POST
+                  - DELETE
+                AllowedOrigins:
+                  - '*'
+                ExposedHeaders: []
+                Id: myCORSRuleId2                
+
+
+      PubPrivateVPC:
+        Type: 'AWS::EC2::VPC'
+        Properties:
+          EnableDnsSupport: true
+          EnableDnsHostnames: true
+          CidrBlock: !FindInMap ['SubnetConfig', 'VPC', 'CIDR']
+          Tags:
+            -
+              Key: 'Name'
+              Value: !Join [' ', ['SLS', !Ref 'ServerlessClusterName', '-', 'VPC']]
+            -
+              Key: 'Description'
+              Value: !Join [' ', ['Created for SLS cluster', !Ref 'ServerlessClusterName']]
+     
+      PublicSubnet1:
+        Type: 'AWS::EC2::Subnet'
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          AvailabilityZone:
+            Fn::Select:
+            - 0
+            - Fn::GetAZs: {Ref: 'AWS::Region'}
+          CidrBlock: !FindInMap ['SubnetConfig', 'PublicOne', 'CIDR']
+          MapPublicIpOnLaunch: true
+          Tags:
+            -
+              Key: 'Name'
+              Value: !Join [' ', ['SLS', !Ref 'ServerlessClusterName', '-', 'Public Subnet 1']]
+            -
+              Key: 'Description'
+              Value: !Join [' ', ['Created for SLS cluster', !Ref 'ServerlessClusterName']]
+     
+      PublicSubnet2:
+        Type: 'AWS::EC2::Subnet'
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          AvailabilityZone:
+            Fn::Select:
+            - 1
+            - Fn::GetAZs: {Ref: 'AWS::Region'}
+          CidrBlock: !FindInMap ['SubnetConfig', 'PublicTwo', 'CIDR']
+          MapPublicIpOnLaunch: true
+          Tags:
+            -
+              Key: 'Name'
+              Value: !Join [' ', ['SLS', !Ref 'ServerlessClusterName', '-', 'Public Subnet 2']]
+            -
+              Key: 'Description'
+              Value: !Join [' ', ['Created for SLS cluster', !Ref 'ServerlessClusterName']]
+
+      PrivateSubnet1:
+        Type: 'AWS::EC2::Subnet'
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          AvailabilityZone:
+            Fn::Select:
+            - 0
+            - Fn::GetAZs: {Ref: 'AWS::Region'}
+          CidrBlock: !FindInMap ['SubnetConfig', 'PrivateOne', 'CIDR']
+          MapPublicIpOnLaunch: false
+          Tags:
+            -
+              Key: 'Name'
+              Value: !Join [' ', ['SLS', !Ref 'ServerlessClusterName', '-', 'Private Subnet 1']]
+            -
+              Key: 'Description'
+              Value: !Join [' ', ['Created for SLS cluster', !Ref 'ServerlessClusterName']]
+     
+      PrivateSubnet2:
+        Type: 'AWS::EC2::Subnet'
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          AvailabilityZone:
+            Fn::Select:
+            - 1
+            - Fn::GetAZs: {Ref: 'AWS::Region'}
+          CidrBlock: !FindInMap ['SubnetConfig', 'PrivateTwo', 'CIDR']
+          MapPublicIpOnLaunch: false
+          Tags:
+            -
+              Key: 'Name'
+              Value: !Join [' ', ['SLS', !Ref 'ServerlessClusterName', '-', 'Private Subnet 2']]
+            -
+              Key: 'Description'
+              Value: !Join [' ', ['Created for SLS cluster', !Ref 'ServerlessClusterName']]
+      
+      InternetGateway:
+        Type: 'AWS::EC2::InternetGateway'
+        Properties:
+          Tags:
+            - Key: Name
+              Value: !Join [_, [!Ref 'AWS::StackName']]
+            - Key: Network
+              Value: Public
+      
+      GatewayToInternet:
+        Type: 'AWS::EC2::VPCGatewayAttachment'
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          InternetGatewayId: !Ref InternetGateway
+      
+      PublicRouteTable:
+        Type: 'AWS::EC2::RouteTable'
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          Tags:
+            - Key: Network
+              Value: Public
+      
+      PublicRoute:
+        Type: 'AWS::EC2::Route'
+        DependsOn: GatewayToInternet
+        Properties:
+          RouteTableId: !Ref PublicRouteTable
+          DestinationCidrBlock: 0.0.0.0/0
+          GatewayId: !Ref InternetGateway
+     
+      PublicSubnet1RouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation'
+        Properties:
+          SubnetId: !Ref PublicSubnet1
+          RouteTableId: !Ref PublicRouteTable
+     
+      PublicSubnet2RouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation'
+        Properties:
+          SubnetId: !Ref PublicSubnet2
+          RouteTableId: !Ref PublicRouteTable
+    
+      NatGateway1:
+        Type: "AWS::EC2::NatGateway"
+        DependsOn: NatPublicIP1
+        Properties: 
+          AllocationId: !GetAtt NatPublicIP1.AllocationId
+          SubnetId: !Ref PublicSubnet1
+     
+      NatPublicIP1:
+        Type: "AWS::EC2::EIP"
+        DependsOn: PubPrivateVPC
+        Properties:
+          Domain: vpc
+
+      NatGateway2:
+        Type: "AWS::EC2::NatGateway"
+        DependsOn: NatPublicIP2
+        Properties: 
+          AllocationId: !GetAtt NatPublicIP2.AllocationId
+          SubnetId: !Ref PublicSubnet2
+
+      NatPublicIP2:
+        Type: "AWS::EC2::EIP"
+        DependsOn: PubPrivateVPC
+        Properties:
+          Domain: vpc    
+     
+      PrivateRouteTable:
+        Type: 'AWS::EC2::RouteTable'
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          Tags:
+            - Key: Network
+              Value: Private
+      
+      PrivateRoute:
+        Type: 'AWS::EC2::Route'
+        Properties:
+          RouteTableId: !Ref PrivateRouteTable
+          DestinationCidrBlock: 0.0.0.0/0
+          NatGatewayId: !Ref NatGateway1  
+     
+      PrivateSubnet1RouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation'
+        Properties:
+          SubnetId: !Ref PrivateSubnet1
+          RouteTableId: !Ref PrivateRouteTable
+     
+      PrivateSubnet2RouteTableAssociation:
+        Type: 'AWS::EC2::SubnetRouteTableAssociation'
+        Properties:
+          SubnetId: !Ref PrivateSubnet2
+          RouteTableId: !Ref PrivateRouteTable
+
+      # an Ec2 Machine For SSH Access
+      SshHostInstance:
+        Type: AWS::EC2::Instance
+        Properties:
+          ImageId: !Ref AMI
+          InstanceType: t2.micro
+          SubnetId: !Ref PublicSubnet1
+          KeyName: !Ref SshKeyName
+          SecurityGroupIds:
+            - !Ref SSHSecurityGroup
+          BlockDeviceMappings:
+            - DeviceName: /dev/sda1
+              Ebs:
+                VolumeSize: 30    
+
+      # an elastic IP for our SSH Instance
+      SshHostEIP:
+        Type: AWS::EC2::EIP
+        DependsOn: PubPrivateVPC
+        Properties:
+          Domain: vpc
+          InstanceId: !Ref SshHostInstance      
+
+      # our EC2 security group
+      SSHSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+          VpcId: !Ref PubPrivateVPC
+          GroupDescription: Enable SSH access via port 22
+          SecurityGroupIngress:
+          - CidrIp: 0.0.0.0/0
+            FromPort: 22
+            IpProtocol: tcp
+            ToPort: 22        
+
+
+
+    Outputs:
+      VPCId:
+        Description: The ID of the VPC that this stack is deployed in
+        Value: !Ref 'PubPrivateVPC'
+        Export:
+          Name: !Join [ ':', [ !Ref 'AWS::StackName', 'VPCId' ] ]
+      PublicSubnetOne:
+        Description: Public subnet one
+        Value: !Ref 'PublicSubnet1'
+        Export:
+          Name: !Join [ ':', [ !Ref 'AWS::StackName', 'PublicSubnet1' ] ]
+      PublicSubnetTwo:
+        Description: Public subnet two
+        Value: !Ref 'PublicSubnet2'
+        Export:
+          Name: !Join [ ':', [ !Ref 'AWS::StackName', 'PublicSubnet2' ] ]    
+      PrivateSubnetOne:
+        Description: Private subnet one
+        Value: !Ref 'PrivateSubnet1'
+        Export:
+          Name: !Join [ ':', [ !Ref 'AWS::StackName', 'PrivateSubnet1' ] ]
+      PrivateSubnetTwo:
+        Description: Private subnet two
+        Value: !Ref 'PrivateSubnet2'
+        Export:
+          Name: !Join [ ':', [ !Ref 'AWS::StackName', 'PrivateSubnet2' ] ]
+      SshHostEip:
+        Description: SSh Host Elastic IP
+        Value: !Ref 'SshHostEIP'
+        Export:
+          Name: !Join [ ':', [ !Ref 'AWS::StackName', 'SshHostEIP' ] ]
+      ResourcesBucket:
+        Value: !Ref ResourcesBucket
+        Description: Name of Resources S3 bucket with CORS enabled.
+        Export:
+          Name: !Join [ ':', [ !Ref 'AWS::StackName', 'ResourcesBucket' ] ]
+      StaticWebsiteHostingBucket:
+        Value: !Ref StaticWebsiteHostingBucketName
+        Description: Name of Static Website Hosting S3 bucket with CORS enabled.
+        Export:
+          Name: !Join [ ':', [ !Ref 'AWS::StackName', 'StaticWebsiteHostingBucket' ] ]
+      StaticWebsiteURL:
+        Value: !GetAtt
+          -  
+          - WebsiteURL
+        Description: URL for website hosted on S3    
