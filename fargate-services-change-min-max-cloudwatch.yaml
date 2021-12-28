@@ -1,0 +1,218 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Lambda function with cfn-response.
+Parameters: 
+  ClusterName: 
+    Default: grammy-staging-ecs-cluster
+    Description: "Cluster name example: grammy-staging-ecs-cluster"
+    Type: String
+  EcsServiceNames: 
+    Default: node-workers,node-worker-trueh,node-worker-dtac,node-worker-cat,node-worker-ais
+    Description: "The resource type is service and the unique identifier is the cluster name and service name. Example: service/default/sample-webapp. Enter Comma seperated list"
+    Type: String
+  MinScaleInValue: 
+    Default: 0
+    Description: The minimum scale in value
+    Type: String
+  MaxScaleInValue: 
+    Default: 10
+    Description: The maximum scale in value
+    Type: String  
+  MinScaleOutValue: 
+    Default: 1
+    Description: The minimum scale out value
+    Type: String
+  MaxScaleOutValue: 
+    Default: 10
+    Description: The maximum scale out value
+    Type: String  
+  Region:
+    Default: ap-southeast-1 
+    Description: region only 1 region supported 
+    Type: String
+  ScaleInScheduled: 
+    Default: cron(30 16 ? * MON-SAT *)
+    Description: enter an Schedule expression example cron(30 23 ? * MON-SAT *) see https://docs.aws.amazon.com/AmazonCloudWatch/latest/events/ScheduledEvents.html
+    Type: String
+  ScaleOutScheduled: 
+    Default: cron(30 22 ? * MON-SAT *)
+    Description: enter an Schedule expression example cron(30 5 ? * MON-SAT *) see https://docs.aws.amazon.com/AmazonCloudWatch/latest/events/ScheduledEvents.html
+    Type: String
+Resources:
+  ScaleInFargateServices:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.8
+      Role: !GetAtt Role.Arn
+      Handler: index.lambda_handler
+      Timeout: 60
+      Environment:
+         Variables:
+          ClusterName: !Ref ClusterName
+          EcsServiceNames: !Ref EcsServiceNames
+          MinCapacityValue: !Ref MinScaleInValue
+          MaxCapacityValue: !Ref MaxScaleInValue
+          Region: !Ref Region
+      Code:
+        ZipFile: |
+          import json
+          import re
+          import os
+          import boto3
+
+          def lambda_handler(event, context):
+            
+            region = os.environ['Region']
+            client = boto3.client('application-autoscaling', region_name=region)
+
+            cluster_name_str = os.environ['ClusterName']
+            service_names_str = os.environ['EcsServiceNames']
+            service_names = service_names_str.split(",")
+
+            min = int(os.environ['MinCapacityValue'])
+            max = int(os.environ['MaxCapacityValue'])
+
+            print('Min/Max Value:',min, max)
+
+            responses = []
+
+            for el in service_names:
+              current_service= "service/" + cluster_name_str + "/" + el
+              print('current_service:',current_service)
+
+              response=client.register_scalable_target(
+                ServiceNamespace='ecs',
+                ResourceId=current_service,
+                ScalableDimension='ecs:service:DesiredCount',
+                MinCapacity=int(min),
+                MaxCapacity=int(max),
+              )
+
+              print('Action Response for service', current_service, response)
+              responses.append(response)
+               
+            return {
+            'statusCode': 200,
+            'body': json.dumps(response)
+            }
+      Description: Function that stops db clusters
+  permissionForEventsToInvokeScaleInFargateServices:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ScaleInFargateServices.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      "SourceArn" : !GetAtt ScaleInScheduledRule.Arn
+
+  ScaleOutFargateServices:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.8
+      Role: !GetAtt Role.Arn
+      Handler: index.lambda_handler
+      Timeout: 60
+      Environment:
+         Variables:
+          ClusterName: !Ref ClusterName
+          EcsServiceNames: !Ref EcsServiceNames
+          MinCapacityValue: !Ref MinScaleOutValue
+          MaxCapacityValue: !Ref MaxScaleOutValue
+          Region: !Ref Region
+      Code:
+        ZipFile: |
+          import json
+          import re
+          import os
+          import boto3
+
+          def lambda_handler(event, context):
+            region = os.environ['Region']
+            client = boto3.client('application-autoscaling', region_name=region)
+
+            cluster_name_str = os.environ['ClusterName']
+            service_names_str = os.environ['EcsServiceNames']
+            service_names = service_names_str.split(",")
+
+            min = int(os.environ['MinCapacityValue'])
+            max = int(os.environ['MaxCapacityValue'])
+
+            print('Min/Max Value:',min, max)
+
+            responses = []
+
+            for el in service_names:
+              current_service= "service/" + cluster_name_str + "/" + el
+              print('current_service:',current_service)
+
+              response=client.register_scalable_target(
+                ServiceNamespace='ecs',
+                ResourceId=current_service,
+                ScalableDimension='ecs:service:DesiredCount',
+                MinCapacity=int(min),
+                MaxCapacity=int(max),
+              )
+
+              print('Action Response for service', current_service, response)
+              responses.append(response)
+               
+            return {
+            'statusCode': 200,
+            'body': json.dumps(response)
+            }
+      Description: Function that started db clusters
+  permissionForEventsToInvokeScaleOutFargateServices:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ScaleOutFargateServices.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      "SourceArn" : !GetAtt ScaleOutScheduledRule.Arn
+
+  Role:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: FargateServicesScaleInOutpermissions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                - "events:*"
+                - "ecs:*"
+                - "application-autoscaling:*"
+                - "autoscaling-plans:*"
+                Resource: '*'
+                
+
+  ScaleInScheduledRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "ScheduledRule"
+      ScheduleExpression: !Ref ScaleInScheduled
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: !GetAtt ScaleInFargateServices.Arn
+          Id: "TargetFunctionV1"
+  ScaleOutScheduledRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "ScheduledRule"
+      ScheduleExpression: !Ref ScaleOutScheduled
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: !GetAtt ScaleOutFargateServices.Arn
+          Id: "TargetFunctionV1"
